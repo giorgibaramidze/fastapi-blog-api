@@ -12,7 +12,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    PROJECT_NAME: str = "Job Board API"
+    PROJECT_NAME: str = "Blog App"
     DEBUG: bool = False
 
     DATABASE_URL: str
