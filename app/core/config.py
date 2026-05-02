@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import SecretStr
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,7 +21,7 @@ class Settings(BaseSettings):
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
-    SMTP_PASSWORD: str = ""
+    SMTP_PASSWORD: SecretStr = SecretStr("")
     EMAILS_FROM_EMAIL: str
     EMAILS_FROM_NAME: str
 
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    
+    FRONTEND_URL: str
 
 
 settings = Settings()  # type: ignore[call-arg]

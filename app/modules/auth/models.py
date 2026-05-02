@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from app.modules.users.models import User
 
 
-class UserSession(Base, TimestampMixin):
+class UserSession(Base):
     __tablename__ = "sessions"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -70,6 +70,11 @@ class UserSession(Base, TimestampMixin):
         nullable=True,
     )
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -101,7 +106,7 @@ class UserSession(Base, TimestampMixin):
     )
 
 
-class AuthToken(Base, TimestampMixin):
+class AuthToken(Base):
     __tablename__ = "auth_tokens"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -115,6 +120,11 @@ class AuthToken(Base, TimestampMixin):
     type: Mapped[AuthTokenType] = mapped_column(Enum(AuthTokenType), nullable=False)
 
     is_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
 
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

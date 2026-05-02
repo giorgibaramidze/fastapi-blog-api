@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from app.core.config import settings
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import APIRouter
+from app.modules.auth.routes import auth_router
  
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -19,6 +20,8 @@ def create_app() -> FastAPI:
     )
 
     api_router = APIRouter(prefix="/api/v1")
+
+    api_router.include_router(auth_router)
 
     app.include_router(api_router)
 
