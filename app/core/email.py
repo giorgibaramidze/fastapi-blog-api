@@ -1,13 +1,7 @@
-from pydantic import NameEmail, SecretStr
-from fastapi_mail import (
-    ConnectionConfig,
-    FastMail,
-    MessageSchema,
-    MessageType,
-)
+from pydantic import NameEmail
+from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 
 from app.core.config import settings
-
 
 conf = ConnectionConfig(
     MAIL_USERNAME=settings.SMTP_USER,
@@ -25,46 +19,32 @@ conf = ConnectionConfig(
 mailer = FastMail(conf)
 
 
-async def send_verification_email(email: str, token: str):
-
+async def send_verification_email(email: str, token: str) -> None:
     verify_url = f"{settings.FRONTEND_URL}/api/v1/auth/verify-email?token={token}"
-
-    html = f"""
-    <h2>Verify your email</h2>
-
-    <a href="{verify_url}">
-        Verify Email
-    </a>
-    """
-
     message = MessageSchema(
         subject="Verify your email",
-        recipients=[
-            NameEmail(
-                name=email,
-                email=email,
-            )
-        ],
-        body=html,
+        recipients=[NameEmail(name=email, email=email)],
+        body=f"""
+        <div style="font-family: sans-serif; max-width: 480px; margin: auto;">
+            <h2>Verify your email</h2>
+            <a href="{verify_url}"
+               style="display:inline-block; padding:12px 24px;
+                      background:#000; color:#fff;
+                      border-radius:6px; text-decoration:none;">
+                Verify Email
+            </a>
+        </div>
+        """,
         subtype=MessageType.html,
     )
-
     await mailer.send_message(message)
-    
-    
+
 
 async def send_password_reset_email(email: str, token: str) -> None:
     url = f"{settings.FRONTEND_URL}/api/v1/auth/reset-password?token={token}"
-
     message = MessageSchema(
         subject="Reset your password",
-         recipients=[
-            NameEmail(
-                name=email,
-                email=email,
-            )
-        ],
-        subtype=MessageType.html,
+        recipients=[NameEmail(name=email, email=email)],
         body=f"""
         <div style="font-family: sans-serif; max-width: 480px; margin: auto;">
             <h2>Reset your password</h2>
@@ -80,6 +60,6 @@ async def send_password_reset_email(email: str, token: str) -> None:
             </p>
         </div>
         """,
+        subtype=MessageType.html,
     )
-
     await mailer.send_message(message)

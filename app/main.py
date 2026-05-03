@@ -3,6 +3,9 @@ from app.core.config import settings
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import APIRouter
 from app.modules.auth.routes import auth_router
+from app.core.exceptions.handlers import (
+    register_exception_handlers,
+)
  
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -11,6 +14,8 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
+    register_exception_handlers(app)
+    
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

@@ -6,12 +6,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from typing import TYPE_CHECKING
 
+from app.db.mixins import TimestampMixin
+
 if TYPE_CHECKING:
     from app.modules.auth.models import UserSession
     from app.modules.auth.models import AuthToken
 
 
-class User(Base):
+class User(Base, TimestampMixin):
     __tablename__ = "users"
 
     email: Mapped[str] = mapped_column(

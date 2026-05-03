@@ -1,10 +1,10 @@
 from datetime import timedelta, datetime, timezone
+from typing import Union
 import uuid
 
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.email import send_verification_email
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -13,7 +13,12 @@ from app.core.security import (
     verify_password,
 )
 from app.db.enums import AuthTokenType, SessionRevokeReason
+from app.modules.auth.exceptions import AccountSuspended, EmailNotVerified, InvalidCredentials, InvalidToken
 from app.modules.auth.repositories import AuthTokenRepository, SessionRepository
+from app.modules.auth.results import (
+    RegisterResult,
+    ResendVerificationResult,
+)
 from app.modules.auth.schemas import (
     LoginRequest,
     LoginResponse,
@@ -22,9 +27,10 @@ from app.modules.auth.schemas import (
     RegisterResponse,
     VerifyEmailResponse,
 )
+from app.modules.users.exceptions import EmailAlreadyExists, UserAlreadyVerified, UserNotFound, UsernameAlreadyExists
 from app.modules.users.repositories import UserRepository
 
-VERIFICATION_TOKEN_TTL = timedelta(hours=24)
+VERIFICATION_TOKEN_TTL = timedelta(minutes=30)
 RESET_TOKEN_TTL = timedelta(hours=1)
 REFRESH_TOKEN_TTL = timedelta(days=30)
 
@@ -44,16 +50,16 @@ class AuthService:
         self,
         db: AsyncSession,
         data: RegisterRequest,
-    ) -> RegisterResponse:
+    ) -> RegisterResult:
 
-        if await self.user_repo.get_by_email(db, data.email):
-            raise ValueError("Email is already registered.")
+        async with db.begin():
 
-        if await self.user_repo.get_by_username(db, data.username):
-            raise ValueError("Username is already taken.")
+            if await self.user_repo.get_by_email(db, data.email):
+                raise EmailAlreadyExists()
 
-        try:
-            # Create user
+            if await self.user_repo.get_by_username(db, data.username):
+                raise UsernameAlreadyExists()
+
             user = await self.user_repo.create(
                 db,
                 email=data.email,
@@ -61,7 +67,6 @@ class AuthService:
                 hashed_password=hash_password(data.password),
             )
 
-            # Create verification token
             raw_token = generate_refresh_token()
             token_hash = hash_token(raw_token)
 
@@ -73,25 +78,9 @@ class AuthService:
                 expires_at=datetime.now(timezone.utc) + VERIFICATION_TOKEN_TTL,
             )
 
-            # Commit transaction
-            await db.commit()
-
-        except Exception:
-            await db.rollback()
-            raise
-
-        # Send email after successful commit
-        await send_verification_email(
+        return RegisterResult(
             email=user.email,
-            token=raw_token,
-        )
-
-        return RegisterResponse(
-            message=(
-                "Registration successful. "
-                "Please check your email to verify your account."
-            ),
-            email=user.email,
+            verification_token=raw_token,
         )
 
     async def verify_email(
@@ -102,61 +91,56 @@ class AuthService:
 
         token_hash = hash_token(raw_token)
 
-        # Find valid token
-        auth_token = await self.auth_token_repo.get_valid_token(
-            db,
-            token_hash=token_hash,
-            token_type=AuthTokenType.EMAIL_VERIFICATION,
-        )
+        async with db.begin():
 
-        if not auth_token:
-            raise ValueError("Invalid or expired verification link.")
-
-        # Load user
-        user = await self.user_repo.get_by_id(
-            db,
-            auth_token.user_id,
-        )
-
-        if not user:
-            raise ValueError("User not found.")
-
-        if user.is_verified:
-            raise ValueError("Email is already verified.")
-
-        try:
-            # Mark token used
-            await self.auth_token_repo.mark_used(
+            auth_token = await self.auth_token_repo.get_valid_token(
                 db,
+                token_hash=token_hash,
+                token_type=AuthTokenType.EMAIL_VERIFICATION,
+            )
+
+            if not auth_token:
+                raise InvalidToken()
+
+            user = await self.user_repo.get_by_id(
+                db,
+                auth_token.user_id,
+            )
+
+            if not user:
+                raise UserNotFound()
+
+            if user.is_verified:
+                raise UserAlreadyVerified()
+
+            await self.auth_token_repo.mark_used(
                 auth_token,
             )
 
-            # Mark user verified
             await self.user_repo.mark_verified(
                 db,
                 user,
             )
 
-            # Commit transaction
-            await db.commit()
-
-        except Exception:
-            await db.rollback()
-            raise
-
         return VerifyEmailResponse(
             message="Email verified successfully. You can now log in."
         )
 
-    async def resend_verification_email(self, db: AsyncSession, email: str):
-        try:
+    async def resend_verification_email(
+        self,
+        db: AsyncSession,
+        email: str,
+    ) -> ResendVerificationResult:
+
+        async with db.begin():
+
             user = await self.user_repo.get_by_email(db, email)
 
-            if not user:
-                raise ValueError("User not found.")
-
-            if user.is_verified:
-                raise ValueError("User is already verified.")
+            if not user or user.is_verified:
+                return ResendVerificationResult(
+                    send_email=False,
+                    message="If account exists, verification email has been sent.",
+                )
 
             await self.auth_token_repo.deactivate_user_tokens(
                 db,
@@ -175,15 +159,12 @@ class AuthService:
                 expires_at=datetime.now(timezone.utc) + VERIFICATION_TOKEN_TTL,
             )
 
-            await db.commit()
-
-        except Exception:
-            await db.rollback()
-            raise
-
-        await send_verification_email(email=user.email, token=raw_token)
-
-        return {"message": "Verification email resent."}
+        return ResendVerificationResult(
+            send_email=True,
+            email=user.email,
+            verification_token=raw_token,
+            message="Verification email sent.",
+        )
 
     async def login(
         self,
@@ -191,37 +172,34 @@ class AuthService:
         data: LoginRequest,
         request: Request,
     ) -> tuple[LoginResponse, str]:
-        """
-        Returns (LoginResponse, raw_refresh_token).
-        raw_refresh_token → cookie-ში ჩაწერა routes.py-დან.
-        """
-        user = await self.user_repo.get_by_email(db, data.email)
 
-        if not user or not verify_password(data.password, user.hashed_password):
-            raise ValueError("Invalid email or password.")
+        async with db.begin():
 
-        if not user.is_active:
-            raise ValueError("Your account has been suspended.")
+            user = await self.user_repo.get_by_email(db, data.email)
 
-        if not user.is_verified:
-            raise ValueError("Please verify your email before logging in.")
+            if not user or not verify_password(data.password, user.hashed_password):
+                raise InvalidCredentials()
 
-        raw_refresh = generate_refresh_token()
-        device_id = str(uuid.uuid4())
+            if not user.is_active:
+                raise AccountSuspended()
 
-        await self.session_repo.create(
-            db,
-            user_id=user.id,
-            refresh_token_hash=hash_token(raw_refresh),
-            device_id=device_id,
-            user_agent=request.headers.get("user-agent"),
-            ip_address=request.client.host if request.client else None,
-            expires_at=datetime.now(timezone.utc) + REFRESH_TOKEN_TTL,
-        )
+            if not user.is_verified:
+                raise EmailNotVerified()
 
-        await self.user_repo.update_last_login(db, user)
+            raw_refresh = generate_refresh_token()
+            device_id = str(uuid.uuid4())
 
-        await db.commit()
+            await self.session_repo.create(
+                db,
+                user_id=user.id,
+                refresh_token_hash=hash_token(raw_refresh),
+                device_id=device_id,
+                user_agent=request.headers.get("user-agent"),
+                ip_address=request.client.host if request.client else None,
+                expires_at=datetime.now(timezone.utc) + REFRESH_TOKEN_TTL,
+            )
+
+            await self.user_repo.update_last_login(db, user)
 
         access_token = create_access_token(subject=user.id)
 
@@ -231,7 +209,8 @@ class AuthService:
         self,
         db: AsyncSession,
         raw_refresh_token: str,
-    ) -> LogoutResponse:
+    ) -> None:
+
         session = await self.session_repo.get_valid_session(
             db,
             refresh_token_hash=hash_token(raw_refresh_token),
@@ -240,23 +219,24 @@ class AuthService:
         if session:
             await self.session_repo.revoke(
                 db,
-                session=session,
+                session_id=session.id,
                 reason=SessionRevokeReason.LOGOUT,
             )
-            await db.commit()
-
-        return LogoutResponse(message="Logged out successfully.")
+            
+        await db.commit() 
 
     async def logout_all_devices(
         self,
         db: AsyncSession,
         user_id: uuid.UUID,
-    ) -> LogoutResponse:
+    ) -> int:
+
         count = await self.session_repo.revoke_all_for_user(
             db,
             user_id=user_id,
             reason=SessionRevokeReason.LOGOUT,
         )
-        await db.commit()
+        
+        await db.commit() 
 
-        return LogoutResponse(message=f"Logged out from {count} device(s).")
+        return count
