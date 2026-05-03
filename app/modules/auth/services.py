@@ -1,16 +1,23 @@
 from datetime import timedelta, datetime, timezone
+import uuid
 
+from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.email import send_verification_email
 from app.core.security import (
+    create_access_token,
     generate_refresh_token,
     hash_password,
     hash_token,
+    verify_password,
 )
-from app.db.enums import AuthTokenType
-from app.modules.auth.repositories import AuthTokenRepository
+from app.db.enums import AuthTokenType, SessionRevokeReason
+from app.modules.auth.repositories import AuthTokenRepository, SessionRepository
 from app.modules.auth.schemas import (
+    LoginRequest,
+    LoginResponse,
+    LogoutResponse,
     RegisterRequest,
     RegisterResponse,
     VerifyEmailResponse,
@@ -18,6 +25,8 @@ from app.modules.auth.schemas import (
 from app.modules.users.repositories import UserRepository
 
 VERIFICATION_TOKEN_TTL = timedelta(hours=24)
+RESET_TOKEN_TTL = timedelta(hours=1)
+REFRESH_TOKEN_TTL = timedelta(days=30)
 
 
 class AuthService:
@@ -25,9 +34,11 @@ class AuthService:
         self,
         user_repo: UserRepository,
         auth_token_repo: AuthTokenRepository,
+        session_repo: SessionRepository,
     ):
         self.user_repo = user_repo
         self.auth_token_repo = auth_token_repo
+        self.session_repo = session_repo
 
     async def register_user(
         self,
@@ -136,8 +147,7 @@ class AuthService:
         return VerifyEmailResponse(
             message="Email verified successfully. You can now log in."
         )
-        
-    
+
     async def resend_verification_email(self, db: AsyncSession, email: str):
         try:
             user = await self.user_repo.get_by_email(db, email)
@@ -174,3 +184,79 @@ class AuthService:
         await send_verification_email(email=user.email, token=raw_token)
 
         return {"message": "Verification email resent."}
+
+    async def login(
+        self,
+        db: AsyncSession,
+        data: LoginRequest,
+        request: Request,
+    ) -> tuple[LoginResponse, str]:
+        """
+        Returns (LoginResponse, raw_refresh_token).
+        raw_refresh_token → cookie-ში ჩაწერა routes.py-დან.
+        """
+        user = await self.user_repo.get_by_email(db, data.email)
+
+        if not user or not verify_password(data.password, user.hashed_password):
+            raise ValueError("Invalid email or password.")
+
+        if not user.is_active:
+            raise ValueError("Your account has been suspended.")
+
+        if not user.is_verified:
+            raise ValueError("Please verify your email before logging in.")
+
+        raw_refresh = generate_refresh_token()
+        device_id = str(uuid.uuid4())
+
+        await self.session_repo.create(
+            db,
+            user_id=user.id,
+            refresh_token_hash=hash_token(raw_refresh),
+            device_id=device_id,
+            user_agent=request.headers.get("user-agent"),
+            ip_address=request.client.host if request.client else None,
+            expires_at=datetime.now(timezone.utc) + REFRESH_TOKEN_TTL,
+        )
+
+        await self.user_repo.update_last_login(db, user)
+
+        await db.commit()
+
+        access_token = create_access_token(subject=user.id)
+
+        return LoginResponse(access_token=access_token), raw_refresh
+
+    async def logout(
+        self,
+        db: AsyncSession,
+        raw_refresh_token: str,
+    ) -> LogoutResponse:
+        session = await self.session_repo.get_valid_session(
+            db,
+            refresh_token_hash=hash_token(raw_refresh_token),
+        )
+
+        if session:
+            await self.session_repo.revoke(
+                db,
+                session=session,
+                reason=SessionRevokeReason.LOGOUT,
+            )
+            await db.commit()
+
+        return LogoutResponse(message="Logged out successfully.")
+
+    async def logout_all_devices(
+        self,
+        db: AsyncSession,
+        user_id: uuid.UUID,
+    ) -> LogoutResponse:
+        count = await self.session_repo.revoke_all_for_user(
+            db,
+            user_id=user_id,
+            reason=SessionRevokeReason.LOGOUT,
+        )
+        await db.commit()
+
+        return LogoutResponse(message=f"Logged out from {count} device(s).")

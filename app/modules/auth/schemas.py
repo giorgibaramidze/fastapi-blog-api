@@ -43,3 +43,57 @@ class VerifyEmailRequest(BaseModel):
 
 class VerifyEmailResponse(BaseModel):
     message: str
+    
+    
+# ─── Resend verification ───────────────────────────────────────────
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+class ResendVerificationResponse(BaseModel):
+    message: str
+
+
+# ─── Login ────────────────────────────────────────────────────────
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+# ─── Logout ───────────────────────────────────────────────────────
+class LogoutResponse(BaseModel):
+    message: str
+
+
+# ─── Password reset ───────────────────────────────────────────────
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str
+
+
+class ResetPasswordConfirmRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters.")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter.")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit.")
+        return v
+
+
+class ResetPasswordConfirmResponse(BaseModel):
+    message: str

@@ -50,3 +50,36 @@ async def send_verification_email(email: str, token: str):
     )
 
     await mailer.send_message(message)
+    
+    
+
+async def send_password_reset_email(email: str, token: str) -> None:
+    url = f"{settings.FRONTEND_URL}/api/v1/auth/reset-password?token={token}"
+
+    message = MessageSchema(
+        subject="Reset your password",
+         recipients=[
+            NameEmail(
+                name=email,
+                email=email,
+            )
+        ],
+        subtype=MessageType.html,
+        body=f"""
+        <div style="font-family: sans-serif; max-width: 480px; margin: auto;">
+            <h2>Reset your password</h2>
+            <p>Click the button below to set a new password.</p>
+            <a href="{url}"
+               style="display:inline-block; padding:12px 24px;
+                      background:#000; color:#fff;
+                      border-radius:6px; text-decoration:none;">
+                Reset Password
+            </a>
+            <p style="color:#999; font-size:12px; margin-top:24px;">
+                Link expires in 1 hour. If you didn't request this, ignore this email.
+            </p>
+        </div>
+        """,
+    )
+
+    await mailer.send_message(message)
